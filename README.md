@@ -86,10 +86,12 @@ open JRunner.app
 版本号的**唯一来源**是仓库根目录的 `VERSION` 文件，打包时注入 `Info.plist` 的 `CFBundleShortVersionString`，界面上状态栏右下角和「关于 JRunner」都能看到。
 
 ```
-VERSION                  # 1.0.0 —— 改这里,别手改 Info.plist
+VERSION                  # 当前版本号 —— 改这里,别手改 Info.plist
 Packaging/Info.plist     # bundle 模板,含 __VERSION__ / __BUILD__ 占位符
+icon_1024.png            # 图标源图(由 make_icon.swift 生成,别手改)
 scripts/
 ├── build_app.sh         # 唯一构建入口(本机 / release.sh / CI 共用)
+├── make_icon.swift      # 画 icon_1024.png(橙色渐变 + 咖啡杯)
 ├── release.sh           # 编译 → zip + dmg → 校验和 → 可选发 Release
 ├── release_notes.sh     # 按提交前缀生成 Release Notes
 └── bump-version.sh      # 版本号自增

@@ -85,7 +85,8 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null \
   || die "生成的 Info.plist 不合法"
 
 # 图标:1024 源图 → iconset → icns
-if [ "${SKIP_ICON:-0}" != "1" ] && [ -f icon_1024.png ]; then
+if [ "${SKIP_ICON:-0}" != "1" ]; then
+  [ -f icon_1024.png ] || die "缺少 icon_1024.png,先跑 swift scripts/make_icon.swift 生成"
   say "生成图标"
   WORK="$(mktemp -d)"
   ICONSET="$WORK/AppIcon.iconset"
@@ -98,7 +99,7 @@ if [ "${SKIP_ICON:-0}" != "1" ] && [ -f icon_1024.png ]; then
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
   rm -rf "$WORK"
 else
-  say "跳过图标(缺少 icon_1024.png)"
+  say "跳过图标(SKIP_ICON=1)"
 fi
 
 # ---------- 签名 ----------
