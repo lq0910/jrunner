@@ -60,3 +60,12 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# ---- JRunner ----
+# 构建产物(build.sh 生成)
+.build/
+JRunner.app/
+# macOS
+.DS_Store
+# SwiftPM
+.swiftpm/
