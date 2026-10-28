@@ -13,6 +13,26 @@ struct SettingsSheet: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.jrTextPrimary)
 
+            // 外观
+            VStack(alignment: .leading, spacing: 7) {
+                Text("外观")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.jrTextSecondary)
+
+                Picker("", selection: $store.appearance) {
+                    ForEach(AppearanceMode.allCases) { m in
+                        Label(m.label, systemImage: m.icon).tag(m)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 320)
+
+                Text("选「跟随系统」时,外观随 macOS 的浅色 / 深色自动切换")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.jrTextTertiary)
+            }
+
             // 扫描目录
             VStack(alignment: .leading, spacing: 7) {
                 Text("扫描目录")
@@ -95,7 +115,7 @@ struct SettingsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 560, height: 560)
+        .frame(width: 560, height: 620)
         .background(Color.jrBg)
         .onAppear {
             rootsText = store.scanRoots.joined(separator: "\n")

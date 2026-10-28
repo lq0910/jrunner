@@ -83,6 +83,15 @@ struct MainView: View {
         .sheet(isPresented: $store.showSettings) {
             SettingsSheet(store: store)
         }
+        .alert(store.git.alert?.title ?? "Git 错误",
+               isPresented: Binding(
+                   get: { store.git.alert != nil },
+                   set: { if !$0 { store.git.alert = nil } }
+               )) {
+            Button("好", role: .cancel) { store.git.alert = nil }
+        } message: {
+            Text(store.git.alert?.message ?? "")
+        }
     }
 
     private func maxMiddleWidth(total: CGFloat) -> CGFloat {
@@ -149,14 +158,14 @@ struct MainView: View {
                     .foregroundStyle(Color.jrTextTertiary)
             }
 
-            // 当前分支(跟随选中项目)
+            // 当前分支(跟随选中项目,点开可切换)
             if let project = store.selectedProject {
                 Rectangle()
                     .fill(Color.jrBorder)
                     .frame(width: 1, height: 18)
                     .padding(.horizontal, 2)
 
-                GitBranchBadge(monitor: store.git, path: project.path)
+                BranchSwitcher(monitor: store.git, store: store, path: project.path)
 
                 Text(project.name)
                     .font(.system(size: 10.5))
@@ -167,6 +176,14 @@ struct MainView: View {
             }
 
             Spacer()
+
+            // 外观切换
+            AppearanceMenu(mode: $store.appearance)
+
+            Rectangle()
+                .fill(Color.jrBorder)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
 
             // 工作区切换(两组联动)
             Picker("", selection: Binding(
@@ -263,6 +280,12 @@ struct MainView: View {
                 }
                 .foregroundStyle(Color.jrTextTertiary)
             }
+
+            // 版本号:来自 Info.plist,即根目录 VERSION 文件
+            Text(AppVersion.display)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.jrTextTertiary.opacity(0.85))
+                .help("JRunner \(AppVersion.short)(构建号 \(AppVersion.build))")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 5)

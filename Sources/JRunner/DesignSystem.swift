@@ -352,6 +352,76 @@ struct GitBranchBadge: View {
     }
 }
 
+/// 可切换分支的徽章:点开是本地分支列表,选中即 checkout。
+/// 样式全部加在 Menu 外层 —— SwiftUI 会把 `.borderlessButton` 标签内部的
+/// padding / background 丢掉,写在里面胶囊底会消失。
+struct BranchSwitcher: View {
+    @ObservedObject var monitor: GitMonitor
+    @ObservedObject var store: AppStore
+    var path: String
+    var maxTextWidth: CGFloat = 150
+
+    private var tint: Color { status?.isDetached == true ? .jrWarning : .jrPurple }
+
+    private var status: GitStatus? { monitor.status(for: path) }
+    private var list: [String] { monitor.branches(for: path) }
+
+    var body: some View {
+        if let status, status.isRepo {
+            Menu {
+                if list.isEmpty {
+                    Text("正在读取分支…")
+                } else {
+                    ForEach(list, id: \.self) { b in
+                        Toggle(isOn: Binding(
+                            get: { b == status.branch },
+                            set: { _ in
+                                guard b != status.branch else { return }
+                                store.switchBranch(b, projectPath: path)
+                            }
+                        )) {
+                            Text(b)
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button("刷新分支列表") {
+                    monitor.loadBranches(path: path)
+                    monitor.refresh(path: path, force: true)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(status.branch)
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: maxTextWidth, alignment: .leading)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 6.5, weight: .bold))
+                        .opacity(0.65)
+                    if status.isDirty {
+                        Circle().fill(tint).frame(width: 4.5, height: 4.5)
+                    }
+                }
+                .foregroundStyle(tint)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .disabled(monitor.isCheckingOut)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .overlay(Capsule().stroke(tint.opacity(0.22), lineWidth: 0.5))
+            .help(status.tooltip + "\n点击切换分支")
+        }
+    }
+}
+
 /// 空状态提示
 struct EmptyStateView: View {
     var icon: String

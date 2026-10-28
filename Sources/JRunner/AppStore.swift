@@ -30,6 +30,14 @@ final class AppStore: ObservableObject {
     @Published var statusMessage: String = ""
     @Published var showSettings = false
 
+    /// 外观模式(深色 / 浅色 / 跟随系统),改动立即生效并持久化
+    @Published var appearance: AppearanceMode {
+        didSet {
+            appearance.apply()
+            defaults.set(appearance.rawValue, forKey: AppearanceMode.storageKey)
+        }
+    }
+
     /// 扫描根目录列表
     @Published var scanRoots: [String] = []
     /// 用户手动添加的项目路径(持久化)
@@ -40,10 +48,16 @@ final class AppStore: ObservableObject {
     private static let rootsKey = "scanRoots"
 
     init() {
+        // 初始化阶段还不能读 self.defaults,直接走 UserDefaults.standard
+        appearance = AppearanceMode(
+            rawValue: UserDefaults.standard.string(forKey: AppearanceMode.storageKey) ?? ""
+        ) ?? .system
+
         AppStore.shared = self
         loadScanRoots()
         manualProjects = defaults.stringArray(forKey: AppStore.manualKey) ?? []
         refreshJDKs()
+        appearance.apply()          // didSet 在 init 里不触发,手动应用一次
     }
 
     // MARK: - 任务 key
@@ -236,6 +250,46 @@ final class AppStore: ObservableObject {
     /// 仅重新读分支(轻量,扫描完成后批量更新侧边栏)
     func refreshAllBranches() {
         git.refreshBranches(paths: projects.map(\.path))
+    }
+
+    // MARK: - 切换分支
+
+    /// 切换分支。成功后重新识别项目 —— 不同分支的模块 / JDK / profile 都可能不一样。
+    func switchBranch(_ branch: String, projectPath: String) {
+        guard let project = projects.first(where: { $0.path == projectPath }) else { return }
+        if git.status(for: projectPath)?.branch == branch { return }
+
+        statusMessage = "正在切换到 \(branch)..."
+        git.checkout(path: projectPath, branch: branch) { [weak self] ok in
+            guard let self else { return }
+            guard ok else {
+                self.statusMessage = "切换分支失败"
+                return
+            }
+            self.statusMessage = "已切换到 \(branch)"
+            self.rescan(project: project)
+        }
+    }
+
+    /// 重新识别单个项目(切分支 / 外部改了 build.gradle 后刷新模块列表)
+    func rescan(project: Project) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let fresh = ProjectScanner.scan(at: project.path) else { return }
+            DispatchQueue.main.async {
+                if let i = self.projects.firstIndex(where: { $0.path == fresh.path }) {
+                    self.projects[i] = fresh
+                }
+                guard self.selectedProject?.path == fresh.path else { return }
+
+                let keep = self.selectedModule?.path
+                self.selectedProject = fresh
+                if let keep, let m = fresh.modules.first(where: { $0.path == keep }) {
+                    self.selectedModule = m
+                } else {
+                    self.selectedModule = fresh.modules.first
+                }
+            }
+        }
     }
 
     // MARK: - 执行

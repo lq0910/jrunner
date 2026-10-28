@@ -65,6 +65,8 @@ fastlane/test_output
 # 构建产物(build.sh 生成)
 .build/
 JRunner.app/
+# 发布产物(scripts/release.sh 生成)
+dist/
 # macOS
 .DS_Store
 # SwiftPM

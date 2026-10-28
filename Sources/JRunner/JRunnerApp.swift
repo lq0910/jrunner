@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct JRunnerApp: App {
@@ -15,6 +16,26 @@ struct JRunnerApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            // 替换系统默认的「关于」,让版本号带上构建号
+            CommandGroup(replacing: .appInfo) {
+                Button("关于 JRunner") {
+                    let credits = NSAttributedString(
+                        string: "轻量级 Java / Kotlin 服务启动器\nMIT License · github.com/lq0910/jrunner",
+                        attributes: [
+                            .font: NSFont.systemFont(ofSize: 11),
+                            .foregroundColor: NSColor.secondaryLabelColor
+                        ]
+                    )
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .applicationName: "JRunner",
+                        .applicationVersion: AppVersion.short,
+                        .version: "构建 \(AppVersion.build)",
+                        .credits: credits
+                    ])
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+
             CommandMenu("操作") {
                 Button("重新扫描项目") {
                     store.scanProjects()

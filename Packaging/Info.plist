@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  JRunner bundle 模板。
+  打包时由 scripts/build_app.sh 替换 __VERSION__ / __BUILD__ / __YEAR__
+  占位符,请勿在脚本之外手改版本号(改根目录的 VERSION 文件)。
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>JRunner</string>
+    <key>CFBundleDisplayName</key>
+    <string>JRunner</string>
+    <key>CFBundleIdentifier</key>
+    <string>cn.workbuddy.jrunner</string>
+    <key>CFBundleExecutable</key>
+    <string>JRunner</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <!-- 版本号:短版本来自 VERSION 文件,构建号来自 git 提交数 -->
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__BUILD__</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <!-- 深色模式:false 表示跟随系统 -->
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    <key>NSTerminateBackOnLeaks</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © __YEAR__ JRunner. Released under the MIT License.</string>
+</dict>
+</plist>

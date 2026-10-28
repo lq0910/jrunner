@@ -98,14 +98,95 @@ enum GitReader {
         let n = out.split(separator: "\n").filter { !$0.isEmpty }.count
         return (n > 0, n)
     }
+
+    /// 列出本地分支。
+    /// 同时读 `.git/refs/heads/**` 和 `.git/packed-refs`,不起 git 进程,
+    /// 几十个分支也是毫秒级。
+    static func localBranches(repoPath: String) -> [String] {
+        guard let dir = gitDir(for: repoPath) else { return [] }
+        var names = Set<String>()
+
+        // 松散引用
+        let heads = dir + "/refs/heads"
+        if let walker = FileManager.default.enumerator(atPath: heads) {
+            for case let rel as String in walker {
+                var isDir: ObjCBool = false
+                let full = heads + "/" + rel
+                guard FileManager.default.fileExists(atPath: full, isDirectory: &isDir),
+                      !isDir.boolValue else { continue }
+                names.insert(rel)
+            }
+        }
+
+        // 打包引用:sha refs/heads/xxx
+        if let packed = try? String(contentsOfFile: dir + "/packed-refs", encoding: .utf8) {
+            for line in packed.split(separator: "\n") {
+                let s = line.trimmingCharacters(in: .whitespaces)
+                guard !s.isEmpty, !s.hasPrefix("#"), !s.hasPrefix("^") else { continue }
+                guard let r = s.range(of: "refs/heads/") else { continue }
+                let name = String(s[r.upperBound...])
+                if !name.isEmpty { names.insert(name) }
+            }
+        }
+
+        return names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// 切换分支。失败时返回 git 的原始报错(未提交改动、分支被占用等),
+    /// 直接展示给用户比「切换失败」有用得多。
+    static func checkout(repoPath: String, branch: String) -> (ok: Bool, message: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = ["-C", repoPath, "checkout", branch]
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        p.standardOutput = outPipe
+        p.standardError = errPipe
+
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        p.environment = env
+
+        do {
+            try p.run()
+        } catch {
+            return (false, error.localizedDescription)
+        }
+
+        // 先读干净再等退出,避免管道写满导致死锁
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+
+        if p.terminationStatus == 0 { return (true, "") }
+
+        let err = String(data: errData, encoding: .utf8) ?? ""
+        let out = String(data: outData, encoding: .utf8) ?? ""
+        let msg = (err + out).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (false, msg.isEmpty ? "git checkout 退出码 \(p.terminationStatus)" : msg)
+    }
 }
 
 // MARK: - 监听器
+
+/// 需要弹窗提示用户的 Git 错误
+struct GitAlert: Identifiable {
+    let id = UUID()
+    var title: String
+    var message: String
+}
 
 /// 按项目路径缓存 Git 状态。读分支走文件,极快;查改动才起 git 进程,放后台。
 final class GitMonitor: ObservableObject {
 
     @Published private(set) var statuses: [String: GitStatus] = [:]
+    /// 各项目的本地分支列表(切分支菜单用,只在需要时读)
+    @Published private(set) var branches: [String: [String]] = [:]
+    /// 正在 checkout(切换期间禁用菜单,避免连点)
+    @Published private(set) var isCheckingOut = false
+    /// 切换失败时弹窗
+    @Published var alert: GitAlert?
 
     private let queue = DispatchQueue(label: "jrunner.git", qos: .utility, attributes: .concurrent)
     private var inFlight = Set<String>()
@@ -114,6 +195,10 @@ final class GitMonitor: ObservableObject {
 
     func status(for path: String) -> GitStatus? {
         statuses[path]
+    }
+
+    func branches(for path: String) -> [String] {
+        branches[path] ?? []
     }
 
     /// 刷新某个项目的 Git 状态
@@ -135,12 +220,48 @@ final class GitMonitor: ObservableObject {
                 return
             }
             let wt = GitReader.readWorkingTree(repoPath: path)
+            let list = GitReader.localBranches(repoPath: path)
             let st = GitStatus(branch: head.branch,
                                isDetached: head.detached,
                                isDirty: wt.dirty,
                                changedCount: wt.count)
             DispatchQueue.main.async {
+                if self.branches[path] != list { self.branches[path] = list }
                 self.finish(path, st)
+            }
+        }
+    }
+
+    /// 单独重读分支列表(菜单里点「刷新」时用)
+    func loadBranches(path: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let list = GitReader.localBranches(repoPath: path)
+            DispatchQueue.main.async {
+                if self.branches[path] != list { self.branches[path] = list }
+            }
+        }
+    }
+
+    /// 切换分支。成功后自动刷新状态并回调 true。
+    func checkout(path: String, branch: String, completion: @escaping (Bool) -> Void) {
+        guard !isCheckingOut else { return }
+        isCheckingOut = true
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            let result = GitReader.checkout(repoPath: path, branch: branch)
+
+            DispatchQueue.main.async {
+                self.isCheckingOut = false
+                if result.ok {
+                    self.refresh(path: path, force: true)
+                    completion(true)
+                } else {
+                    self.alert = GitAlert(title: "切换到 \(branch) 失败",
+                                          message: result.message)
+                    completion(false)
+                }
             }
         }
     }

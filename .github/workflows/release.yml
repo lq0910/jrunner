@@ -1,0 +1,206 @@
+name: Release
+
+# 触发方式(三选一,彼此幂等,不会重复发版):
+#   1. 改 VERSION 文件后推 main —— 最常用,标签由本流程自动创建
+#   2. 手动推一个 v1.2.3 标签 —— 走「标签即事实」的路径
+#   3. Actions 页面手动 Run workflow —— 可临时指定版本号补发
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本号(留空则读 VERSION 文件)'
+        required: false
+        type: string
+
+# 同一时间只跑一个发布,避免两个 job 抢着创建同一个标签
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # 1 = 打 arm64 + x86_64 通用包(Apple Silicon / Intel 都能装)
+  # 若某天 runner 的 SDK 不再支持 x86_64,改成 0 即可
+  UNIVERSAL: '1'
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. 决定「这次到底要不要发版、发哪个版本」——跑在廉价的 Linux 上
+  # ---------------------------------------------------------------
+  prepare:
+    name: 解析版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: v
+        name: 计算版本号
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            SOURCE="标签 $GITHUB_REF_NAME"
+          elif [ -n "${INPUT_VERSION:-}" ]; then
+            VERSION="${INPUT_VERSION#v}"
+            SOURCE="手动输入"
+          else
+            VERSION="$(tr -d '[:space:]' < VERSION)"
+            SOURCE="VERSION 文件"
+          fi
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::版本号不合法: '$VERSION'(应形如 1.0.0)"
+            exit 1
+          fi
+
+          TAG="v$VERSION"
+          echo "版本来源:$SOURCE → $TAG"
+
+          # 已经发过这个版本就安静跳过,让重复推送不报错
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在,跳过"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" != "tag" ] \
+               && git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "标签 $TAG 已存在但还没有 Release,补发 Release"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 摘要
+        run: |
+          {
+            echo "### 发布计划"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | \`${{ steps.v.outputs.tag }}\` |"
+            echo "| 是否发版 | \`${{ steps.v.outputs.should_release }}\` |"
+            echo "| 架构 | \`$UNIVERSAL\`(1 = 通用二进制) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------
+  # 2. 在 macOS runner 上构建 + 打包
+  # ---------------------------------------------------------------
+  build:
+    name: 构建 ${{ needs.prepare.outputs.tag }}
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # release_notes 要靠完整历史和标签算 diff
+
+      - name: 环境信息
+        run: |
+          echo "swift: $(swift --version 2>&1 | head -1)"
+          xcodebuild -version || true
+          sw_vers
+
+      - name: 构建与打包
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          chmod +x scripts/*.sh build.sh
+          ./scripts/release.sh --yes
+          ls -lh dist
+
+      - name: 冒烟检查
+        run: |
+          set -euo pipefail
+          unzip -q "dist/JRunner-${{ needs.prepare.outputs.version }}.zip" -d /tmp/smoke
+          APP="/tmp/smoke/JRunner.app"
+          test -x "$APP/Contents/MacOS/JRunner"
+          plutil -lint "$APP/Contents/Info.plist"
+          echo "--- 版本字段 ---"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"
+          echo "--- 架构 ---"
+          lipo -archs "$APP/Contents/MacOS/JRunner"
+          codesign --verify --deep --strict "$APP" && echo "签名校验通过"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/*.zip
+            dist/*.dmg
+            dist/*.sha256
+            dist/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # 3. 创建标签 + 发布 Release(标签不存在时自动创建)
+  # ---------------------------------------------------------------
+  publish:
+    name: 发布 ${{ needs.prepare.outputs.tag }}
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: 创建标签并发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          ASSETS=(dist/*.zip dist/*.dmg dist/*.sha256)
+          echo "上传文件:"
+          ls -lh "${ASSETS[@]}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "标签 $TAG 已存在,直接在其上建 Release"
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "JRunner $TAG" \
+              --notes-file dist/RELEASE_NOTES.md
+          else
+            echo "标签 $TAG 不存在,在 $GITHUB_SHA 上自动创建"
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "JRunner $TAG" \
+              --notes-file dist/RELEASE_NOTES.md \
+              --target "$GITHUB_SHA"
+          fi
+
+      - name: 摘要
+        run: |
+          {
+            echo "### 已发布"
+            echo ""
+            echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/${{ needs.prepare.outputs.tag }}"
+          } >> "$GITHUB_STEP_SUMMARY"
